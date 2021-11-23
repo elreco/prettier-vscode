@@ -1,16 +1,13 @@
 import { commands, ExtensionContext, workspace } from "vscode";
 import { createConfigFile } from "./commands";
-import { ConfigResolver } from "./ConfigResolver";
-import { IgnorerResolver } from "./IgnorerResolver";
-import { LanguageResolver } from "./LanguageResolver";
 import { LoggingService } from "./LoggingService";
 import { ModuleResolver } from "./ModuleResolver";
-import { NotificationService } from "./NotificationService";
 import PrettierEditService from "./PrettierEditService";
-import { StatusBarService } from "./StatusBarService";
+import { StatusBar } from "./StatusBar";
 import { TemplateService } from "./TemplateService";
 import { getConfig } from "./util";
-import { RESTART_TO_ENABLE } from "./message";
+import { RESTART_TO_ENABLE, EXTENSION_DISABLED } from "./message";
+import { setGlobalState, setWorkspaceState } from "./stateUtils";
 
 // the application insights key (also known as instrumentation key)
 const extensionName = process.env.EXTENSION_NAME || "dev.prettier-vscode";
@@ -22,11 +19,14 @@ export function activate(context: ExtensionContext) {
   loggingService.logInfo(`Extension Name: ${extensionName}.`);
   loggingService.logInfo(`Extension Version: ${extensionVersion}.`);
 
-  const { enable } = getConfig();
+  const { enable, enableDebugLogs } = getConfig();
+
+  if (enableDebugLogs) {
+    loggingService.setOutputLevel("DEBUG");
+  }
+
   if (!enable) {
-    loggingService.logInfo(
-      "Extension is disabled. No formatters will be registered. To enable, change the `prettier.enable` to `true` and restart VS Code."
-    );
+    loggingService.logInfo(EXTENSION_DISABLED);
     context.subscriptions.push(
       workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration("prettier.enable")) {
@@ -37,7 +37,25 @@ export function activate(context: ExtensionContext) {
     return;
   }
 
-  const templateService = new TemplateService(loggingService);
+  setGlobalState(context.globalState);
+  setWorkspaceState(context.workspaceState);
+
+  const moduleResolver = new ModuleResolver(loggingService);
+
+  const templateService = new TemplateService(
+    loggingService,
+    moduleResolver.getGlobalPrettierInstance()
+  );
+
+  const statusBar = new StatusBar();
+
+  const editService = new PrettierEditService(
+    moduleResolver,
+    loggingService,
+    statusBar
+  );
+  editService.registerGlobal();
+
   const createConfigFileFunc = createConfigFile(templateService);
   const createConfigFileCommand = commands.registerCommand(
     "prettier.createConfigFile",
@@ -49,39 +67,16 @@ export function activate(context: ExtensionContext) {
       loggingService.show();
     }
   );
-
-  const ignoreResolver = new IgnorerResolver(loggingService);
-  const configResolver = new ConfigResolver(loggingService);
-  const notificationService = new NotificationService(loggingService);
-
-  const moduleResolver = new ModuleResolver(
-    loggingService,
-    notificationService
+  const forceFormatDocumentCommand = commands.registerCommand(
+    "prettier.forceFormatDocument",
+    editService.forceFormatDocument
   );
-
-  const languageResolver = new LanguageResolver(moduleResolver);
-
-  const statusBarService = new StatusBarService(
-    languageResolver,
-    loggingService
-  );
-
-  const editService = new PrettierEditService(
-    moduleResolver,
-    languageResolver,
-    ignoreResolver,
-    configResolver,
-    loggingService,
-    notificationService,
-    statusBarService
-  );
-  editService.registerFormatter();
 
   context.subscriptions.push(
     editService,
     createConfigFileCommand,
     openOutputCommand,
-    ...editService.registerDisposables(),
-    ...statusBarService.registerDisposables()
+    forceFormatDocumentCommand,
+    ...editService.registerDisposables()
   );
 }

@@ -1,7 +1,6 @@
-import * as prettier from "prettier";
 import { window } from "vscode";
 
-type LogLevel = "INFO" | "WARN" | "ERROR" | "NONE";
+type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "NONE";
 
 export class LoggingService {
   private outputChannel = window.createOutputChannel("Prettier");
@@ -10,6 +9,26 @@ export class LoggingService {
 
   public setOutputLevel(logLevel: LogLevel) {
     this.logLevel = logLevel;
+  }
+
+  /**
+   * Append messages to the output channel and format it with a title
+   *
+   * @param message The message to append to the output channel
+   */
+  public logDebug(message: string, data?: unknown): void {
+    if (
+      this.logLevel === "NONE" ||
+      this.logLevel === "INFO" ||
+      this.logLevel === "WARN" ||
+      this.logLevel === "ERROR"
+    ) {
+      return;
+    }
+    this.logMessage(message, "DEBUG");
+    if (data) {
+      this.logObject(data);
+    }
   }
 
   /**
@@ -46,7 +65,7 @@ export class LoggingService {
     }
   }
 
-  public logError(message: string, error?: Error | string) {
+  public logError(message: string, error?: unknown) {
     if (this.logLevel === "NONE") {
       return;
     }
@@ -55,7 +74,7 @@ export class LoggingService {
       // Errors as a string usually only happen with
       // plugins that don't return the expected error.
       this.outputChannel.appendLine(error);
-    } else if (error?.message || error?.stack) {
+    } else if (error instanceof Error) {
       if (error?.message) {
         this.logMessage(error.message, "ERROR");
       }
@@ -72,11 +91,13 @@ export class LoggingService {
   }
 
   private logObject(data: unknown): void {
-    const message = prettier
-      .format(JSON.stringify(data, null, 2), {
-        parser: "json",
-      })
-      .trim();
+    // const message = JSON.parser
+    //   .format(JSON.stringify(data, null, 2), {
+    //     parser: "json",
+    //   })
+    //   .trim();
+    const message = JSON.stringify(data, null, 2); // dont use prettrer to keep it simple
+
     this.outputChannel.appendLine(message);
   }
 

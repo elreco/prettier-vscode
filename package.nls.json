@@ -1,17 +1,20 @@
 {
   "ext.command.createConfigFile.title": "Prettier: Create Configuration File",
+  "ext.command.forceFormatDocument.title": "Format Document (Forced)",
   "ext.config.arrowParens": "Include parentheses around a sole arrow function parameter",
   "ext.config.bracketSpacing": "Controls the printing of spaces inside object literals",
   "ext.config.configPath": "Path to the prettier configuration file",
   "ext.config.disableLanguages": "A list of languages IDs to disable this extension on",
+  "ext.config.disableLanguagesDeprecation": "This feature is no longer supported. Instead, configure VS Code [default formatters](https://github.com/prettier/prettier-vscode#default-formatter) or use .prettierignore.",
   "ext.config.documentSelectors": "A list of [glob patterns](https://code.visualstudio.com/api/references/vscode-api#GlobPattern) to register Prettier formatter",
   "ext.config.endOfLine": "Specify the end of line used by prettier",
-  "ext.config.htmlWhitespaceSensitivity": "Specify the global whitespace sensitivity for HTML files.\n Valid options:\n- `css` - Respect the default value of CSS display property.\n- `strict` - Whitespaces are considered sensitive.\n- `ignores` - Whitespaces are considered insensitive.",
+  "ext.config.htmlWhitespaceSensitivity": "Specify the global whitespace sensitivity for HTML files.\n Valid options:\n- `css` - Respect the default value of CSS display property.\n- `strict` - Whitespaces are considered sensitive.\n- `ignore` - Whitespaces are considered insensitive.",
   "ext.config.ignorePath": "Path to a .prettierignore file",
   "ext.config.insertPragma": "Prettier can insert a special @format marker at the top of files specifying that the file has been formatted with prettier. This works well when used in tandem with the `--require-pragma` option. If there is already a docblock at the top of the file then this option will add a newline to it with the @format marker.",
   "ext.config.jsxBracketSameLine": "If true, puts the `>` of a multi-line jsx element at the end of the last line instead of being alone on the next line",
   "ext.config.jsxSingleQuote": "Use single quotes instead of double quotes in JSX",
   "ext.config.packageManager": "The package manager you use to install node modules.",
+  "ext.config.packageManagerDeprecation": "Package manager is now automatically detected by VS Code. This setting is no longer used.",
   "ext.config.parser": "Override the parser. You shouldn't have to change this setting.",
   "ext.config.parserDeprecationMessage": "This setting is no longer supported. Use a prettier configuration file instead.",
   "ext.config.prettierPath": "Path to the prettier module",
@@ -31,5 +34,7 @@
   "ext.config.useTabs": "Indent lines with tabs",
   "ext.config.vueIndentScriptAndStyle": "Whether or not to indent the code inside `<script>` and `<style>` tags in Vue files. Some people (like the creator of Vue) don’t indent to save an indentation level, but this might break code folding in your editor.",
   "ext.config.embeddedLanguageFormatting": "Control whether Prettier formats quoted code embedded in the file.",
-  "ext.config.enable": "Controls whether prettier is enabled or not."
+  "ext.config.enable": "Controls whether prettier is enabled or not.",
+  "ext.config.enableDebugLogs": "Enable debug logs for troubleshooting.",
+  "ext.capabilities.untrustedWorkspaces.description": "Only the built-in version of Prettier will be used when running in untrusted mode."
 }

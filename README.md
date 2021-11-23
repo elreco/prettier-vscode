@@ -74,6 +74,40 @@ To ensure that this extension is used over other extensions you may have install
 }
 ```
 
+If you want to disable Prettier on a particular language you can either create a `.prettierignore` file or you can use VS Code's `editor.defaultFormatter` settings.
+
+The following will use Prettier for all languages except Javascript.
+
+```json
+{
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[javascript]": {
+    "editor.defaultFormatter": "<another formatter>"
+  }
+}
+```
+
+The following will use Prettier for only Javascript.
+
+```json
+{
+  "editor.defaultFormatter": "<another formatter>",
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
+}
+```
+
+Additionally, you can disable format on save for specific languages if you don't want them to be automatically formatted.
+
+```json
+{
+  "[javascript]": {
+    "editor.formatOnSave": false
+  }
+}
+```
+
 ### Prettier Resolution
 
 This extension will use prettier from your project's local dependencies (recommended). When the `prettier.resolveGlobalModules` is set to `true` the extension can also attempt to resolve global modules. Should prettier not be installed locally with your project's dependencies or globally on the machine, the version of prettier that is bundled with the extension will be used.
@@ -83,6 +117,8 @@ To install prettier in your project and pin its version [as recommended](https:/
 ```
 npm install prettier -D --save-exact
 ```
+
+> NOTE: You will be prompted to confirm that you want the extension to load a Prettier module. This is done to ensure that you are not loading a module or script that is not trusted.
 
 ### Plugins
 
@@ -96,9 +132,7 @@ Using [Prettier Configuration files](https://prettier.io/docs/en/configuration.h
 
 ### Configuring Default Options
 
-Some users may not wish to create a new Prettier config for every project or use the VS Code settings. Because Prettier searches recursively up the file path, you can place a global prettier config at `~/.prettierrc` to be used as a fallback.
-
-You can also use the setting [`prettier.configPath`](https://github.com/prettier/prettier-vscode#prettierconfigpath) to provide a global configuration. However, be careful, if this is set this value will always be used and local configuration files will be ignored.
+Some users may not wish to create a new Prettier config for every project or use the VS Code settings. In order to set a default configuraiton, set [`prettier.configPath`](https://github.com/prettier/prettier-vscode#prettierconfigpath). However, be careful, if this is set this value will always be used and local configuration files will be ignored.
 
 ### Visual Studio Code Settings
 
@@ -155,54 +189,17 @@ json
 graphql
 ```
 
+### Format Document (Forced)
+
+If you would like to format a document that is configured to be ignored by Prettier either because it is in a `.prettierignore` file or part of a normally excluded location like `node_modules`, you can run the command **Format Document (Forced)** to force the document to be formatted. Forced mode will also ignore any config for `requirePragma` allowing you to format files without the pragma comment present.
+
 ## Linter Integration
 
-There are two ways to use Prettier and linters together. The first approach is to simply let each tool do what it was meant for: Prettier formats and the linter lints. You do this by disabling any rules in your linter that check formatting and let Prettier automatically handle all the formatting. The second approach is to use the linter to run prettier though a plugin with the linter.
+The recommended way of integrating with linters is to let Prettier do the formatting and configure the linter to not deal with formatting rules. You can find instructions on how to configure each linter on the Prettier docs site. You can then use each of the linting extensions as you normally would. For details refere to the [Prettier documentation](https://prettier.io/docs/en/integrating-with-linters.html).
 
-### Disable Formatting Rules in the Linter
+## Workspace Trust
 
-The easiest and recommended way of integrating with linters is to let Prettier do the formatting and configure the linter to not deal with formatting rules. You can find instructions on how to configure each linter on the Prettier docs site. You can then use each of the linting extensions as you normally would.
-
-- **ESLint**: [Extension](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) | [Configuration](https://prettier.io/docs/en/integrating-with-linters.html#disable-formatting-rules)
-- **TSLint**: [Extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.vscode-typescript-tslint-plugin) | [Configuration](https://prettier.io/docs/en/integrating-with-linters.html#disable-formatting-rules-1)
-- **Stylelint**: [Extension](https://marketplace.visualstudio.com/items?itemName=stylelint.vscode-stylelint) | [Configuration](https://prettier.io/docs/en/integrating-with-linters.html#disable-formatting-rules-2)
-
-You can enable Auto-Fix on Save for ESLint, TSLint or Stylelint and still have formatting and quick fixes:
-
-```
-"editor.codeActionsOnSave": {
-    // For ESLint
-    "source.fixAll.eslint": true,
-    // For TSLint
-    "source.fixAll.tslint": true,
-    // For Stylelint
-    "source.fixAll.stylelint": true
-}
-```
-
-> NOTE: If you are seeing conflicts between Prettier and ESLint this is because you don't have the right ESLint or TSLint rules set as explained in the [Prettier documentation](https://prettier.io/docs/en/integrating-with-linters.html).
-
-### Run Prettier through Linters
-
-Another option to run Prettier and linters together is to have the linters run Prettier. For these configurations you **DO NOT USE THIS EXTENSION**. Instead you use the linter extensions to run the linter and Prettier. See the Prettier documentation for instructions on how to configure each linter. This setup is generally **not recommended**, but can be useful in certain circumstances. To learn about why you probably should avoid this setup see [the prettier documentation](https://prettier.io/docs/en/integrating-with-linters.html#notes).
-
-- **ESLint**: [Extension](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) | [Configuration](https://prettier.io/docs/en/integrating-with-linters.html#use-eslint-to-run-prettier)
-- **TSLint**: [Extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.vscode-typescript-tslint-plugin) | [Configuration](https://prettier.io/docs/en/integrating-with-linters.html#use-tslint-to-run-prettier)
-- **Stylelint**: [Extension](https://marketplace.visualstudio.com/items?itemName=stylelint.vscode-stylelint) | [Configuration](https://prettier.io/docs/en/integrating-with-linters.html#use-stylelint-to-run-prettier)
-
-Disable format on save so this extension doesn't run and enable code actions to run the linters on save.
-
-```
-"editor.formatOnSave": false,
-"editor.codeActionsOnSave": {
-    // For ESLint
-    "source.fixAll.eslint": true,
-    // For TSLint
-    "source.fixAll.tslint": true,
-    // For Stylelint
-    "source.fixAll.stylelint": true
-}
-```
+This extension utilizes VS Code [Workspace Trust](https://code.visualstudio.com/docs/editor/workspace-trust) features. When this extension is run on an untrusted workspace, it will only use the built in version of prettier. No plugins, local, or global modules will be supported. Additionally, certain settings are also restricted - see each setting for details.
 
 ## Settings
 
@@ -252,19 +249,21 @@ Files which match will not be formatted. Set to `null` to not read ignore files.
 
 **Note, if this is set, this value will always be used and local ignore files will be ignored.**
 
+**Disabled on untrusted workspaces**
+
 #### prettier.configPath
 
 Supply a custom path to the prettier configuration file.
 
 **Note, if this is set, this value will always be used and local configuration files will be ignored. A better option for global defaults is to put a `~/.prettierrc` file in your home directory.**
 
+**Disabled on untrusted workspaces**
+
 #### prettier.prettierPath
 
 Supply a custom path to the prettier module. This path should be to the module folder, not the bin/script path. i.e. `./node_modules/prettier`, not `./bin/prettier`.
 
-#### prettier.packageManager
-
-Controls the package manager to be used to resolve modules. This has only an influence if the `prettier.resolveGlobalModules` setting is `true` and modules are resolved globally. Valid values are `"npm"` or `"yarn"` or `"pnpm"`.
+**Disabled on untrusted workspaces**
 
 #### prettier.resolveGlobalModules (default: `false`)
 
@@ -272,11 +271,9 @@ When enabled, this extension will attempt to use global npm or yarn modules if l
 
 > NOTE: This setting can have a negative performance impact, particularly on Windows when you have attached network drives. Only enable this if you must use global modules. It is recommended that you always use local modules when possible.
 
-#### prettier.disableLanguages
-
-A list of languages IDs to disable this extension on.
-
 **Note: Disabling a language enabled in a parent folder will prevent formatting instead of letting any other formatter to run**
+
+**Disabled on untrusted workspaces**
 
 #### prettier.documentSelectors
 
@@ -305,13 +302,19 @@ To tell Prettier how to format a file of type `.abc` I can set an override in th
 }
 ```
 
+**Disabled on untrusted workspaces**
+
 #### prettier.useEditorConfig (default: `true`)
 
 Whether or not to take .editorconfig into account when parsing configuration. See the [prettier.resolveConfig docs](https://prettier.io/docs/en/api.html) for details.
 
+**Disabled on untrusted workspaces (always false)**
+
 #### prettier.withNodeModules (default: `false`)
 
 Whether or not to process files in the `node_modules` folder.
+
+**Disabled on untrusted workspaces**
 
 ## Error Messages
 
@@ -323,6 +326,6 @@ When a `package.json` is present in your project and it contains prettier, plugi
 
 You must upgrade to a newer version of prettier.
 
-```
+**This workspace is not trusted. Using the bundled version of prettier.**
 
-```
+You must trust this workspace to use plugins and local/global modules. See: [Workspace Trust](https://code.visualstudio.com/docs/editor/workspace-trust)

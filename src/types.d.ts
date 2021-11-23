@@ -1,6 +1,38 @@
 import * as prettier from "prettier";
+import { TextDocument } from "vscode";
 
-type PrettierModule = typeof prettier;
+type PrettierSupportLanguage = {
+  vscodeLanguageIds?: string[];
+  extensions?: string[];
+  parsers: string[];
+};
+type PrettierFileInfoResult = {
+  ignored: boolean;
+  inferredParser?: PrettierBuiltInParserName | null;
+};
+type PrettierBuiltInParserName = string;
+type PrettierResolveConfigOptions = prettier.ResolveConfigOptions;
+type PrettierOptions = prettier.Options;
+type PrettierFileInfoOptions = prettier.FileInfoOptions;
+
+type PrettierModule = {
+  format(source: string, options?: prettier.Options): string;
+  getSupportInfo(): { languages: PrettierSupportLanguage[] };
+  getFileInfo(
+    filePath: string,
+    options?: PrettierFileInfoOptions
+  ): Promise<PrettierFileInfoResult>;
+};
+
+type ModuleResolverInterface = {
+  getPrettierInstance(fileName: string): Promise<PrettierModule | undefined>;
+  getGlobalPrettierInstance(): PrettierModule;
+  getResolvedConfig(
+    doc: TextDocument,
+    vscodeConfig: PrettierVSCodeConfig
+  ): Promise<"error" | "disabled" | PrettierOptions | null>;
+  dispose(): void;
+};
 
 type TrailingCommaOption = "none" | "es5" | "all";
 
@@ -27,14 +59,6 @@ interface IExtensionConfig {
    */
   requireConfig: boolean;
   /**
-   * The package manager to use when resolving global modules.
-   */
-  packageManager: PackageManagers;
-  /**
-   * Array of language IDs to ignore
-   */
-  disableLanguages: string[];
-  /**
    * If true, take into account the .editorconfig file when resolving configuration.
    */
   useEditorConfig: boolean;
@@ -54,10 +78,23 @@ interface IExtensionConfig {
    * If true, this extension will be enabled
    */
   enable: boolean;
+  /**
+   * If true, enabled debug logs
+   */
+  enableDebugLogs: boolean;
 }
 /**
  * Configuration for prettier-vscode
  */
 export type PrettierVSCodeConfig = IExtensionConfig & prettier.Options;
 
-type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
+export interface RangeFormattingOptions {
+  rangeStart: number;
+  rangeEnd: number;
+}
+
+export interface ExtensionFormattingOptions {
+  rangeStart?: number;
+  rangeEnd?: number;
+  force: boolean;
+}

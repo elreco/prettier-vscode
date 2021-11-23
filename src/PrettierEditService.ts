@@ -1,29 +1,34 @@
-import throttle = require("lodash/throttle");
-import * as prettier from "prettier";
 import {
   Disposable,
   DocumentFilter,
-  DocumentSelector,
   languages,
   Range,
   TextDocument,
   TextEdit,
+  TextEditor,
+  Uri,
+  window,
   workspace,
 } from "vscode";
-import { ConfigResolver, RangeFormattingOptions } from "./ConfigResolver";
-import { IgnorerResolver } from "./IgnorerResolver";
-import { LanguageResolver } from "./LanguageResolver";
+import { getParserFromLanguageId } from "./languageFilters";
 import { LoggingService } from "./LoggingService";
-import { INVALID_PRETTIER_CONFIG, RESTART_TO_ENABLE } from "./message";
-import { ModuleResolver } from "./ModuleResolver";
-import { NotificationService } from "./NotificationService";
+import { RESTART_TO_ENABLE } from "./message";
 import { PrettierEditProvider } from "./PrettierEditProvider";
-import { FormattingResult, StatusBarService } from "./StatusBarService";
+import { FormatterStatus, StatusBar } from "./StatusBar";
+import {
+  ExtensionFormattingOptions,
+  ModuleResolverInterface,
+  PrettierBuiltInParserName,
+  PrettierFileInfoResult,
+  PrettierModule,
+  PrettierOptions,
+  RangeFormattingOptions,
+} from "./types";
 import { getConfig, getWorkspaceRelativePath } from "./util";
 
 interface ISelectors {
-  rangeLanguageSelector: DocumentSelector;
-  languageSelector: DocumentSelector;
+  rangeLanguageSelector: ReadonlyArray<DocumentFilter>;
+  languageSelector: ReadonlyArray<DocumentFilter>;
 }
 
 /**
@@ -47,65 +52,167 @@ const PRETTIER_CONFIG_FILES = [
 export default class PrettierEditService implements Disposable {
   private formatterHandler: undefined | Disposable;
   private rangeFormatterHandler: undefined | Disposable;
+  private registeredWorkspaces = new Set<string>();
+
+  private allLanguages: string[] = [];
+  private allExtensions: string[] = [];
+  private allRangeLanguages: string[] = [
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact",
+    "json",
+    "graphql",
+  ];
 
   constructor(
-    private moduleResolver: ModuleResolver,
-    private languageResolver: LanguageResolver,
-    private ignoreResolver: IgnorerResolver,
-    private configResolver: ConfigResolver,
+    private moduleResolver: ModuleResolverInterface,
     private loggingService: LoggingService,
-    private notificationService: NotificationService,
-    private statusBarService: StatusBarService
+    private statusBar: StatusBar
   ) {}
 
   public registerDisposables(): Disposable[] {
     const packageWatcher = workspace.createFileSystemWatcher("**/package.json");
-    packageWatcher.onDidChange(this.registerFormatterThrottled);
-    packageWatcher.onDidCreate(this.registerFormatterThrottled);
-    packageWatcher.onDidDelete(this.registerFormatterThrottled);
+    packageWatcher.onDidChange(this.resetFormatters);
+    packageWatcher.onDidCreate(this.resetFormatters);
+    packageWatcher.onDidDelete(this.resetFormatters);
 
     const configurationWatcher = workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("prettier.enable")) {
         this.loggingService.logWarning(RESTART_TO_ENABLE);
       } else if (event.affectsConfiguration("prettier")) {
-        this.registerFormatter();
+        this.resetFormatters();
       }
     });
-
-    const workspaceWatcher = workspace.onDidChangeWorkspaceFolders(
-      this.registerFormatter
-    );
 
     const prettierConfigWatcher = workspace.createFileSystemWatcher(
       `**/{${PRETTIER_CONFIG_FILES.join(",")}}`
     );
-    prettierConfigWatcher.onDidChange(this.registerFormatterThrottled);
-    prettierConfigWatcher.onDidCreate(this.registerFormatterThrottled);
-    prettierConfigWatcher.onDidDelete(this.registerFormatterThrottled);
+    prettierConfigWatcher.onDidChange(this.prettierConfigChanged);
+    prettierConfigWatcher.onDidCreate(this.prettierConfigChanged);
+    prettierConfigWatcher.onDidDelete(this.prettierConfigChanged);
+
+    const textEditorChange = window.onDidChangeActiveTextEditor(
+      this.handleActiveTextEditorChanged
+    );
+
+    this.handleActiveTextEditorChanged(window.activeTextEditor);
 
     return [
       packageWatcher,
       configurationWatcher,
-      workspaceWatcher,
       prettierConfigWatcher,
+      textEditorChange,
     ];
   }
 
-  public registerFormatter = () => {
-    this.dispose();
-    const { languageSelector, rangeLanguageSelector } = this.selectors();
-    const editProvider = new PrettierEditProvider(this.provideEdits);
-    this.rangeFormatterHandler = languages.registerDocumentRangeFormattingEditProvider(
-      rangeLanguageSelector,
-      editProvider
-    );
-    this.formatterHandler = languages.registerDocumentFormattingEditProvider(
-      languageSelector,
-      editProvider
-    );
+  public forceFormatDocument = async () => {
+    try {
+      const editor = window.activeTextEditor;
+      if (!editor) {
+        this.loggingService.logInfo(
+          "No active document. Nothing was formatted."
+        );
+        return;
+      }
+
+      this.loggingService.logInfo(
+        "Forced formatting will not use ignore files."
+      );
+
+      const edits = await this.provideEdits(editor.document, { force: true });
+      if (edits.length !== 1) {
+        return;
+      }
+
+      await editor.edit((editBuilder) => {
+        editBuilder.replace(edits[0].range, edits[0].newText);
+      });
+    } catch (e) {
+      this.loggingService.logError("Error formatting document", e);
+    }
   };
 
-  private registerFormatterThrottled = throttle(this.registerFormatter, 300);
+  private prettierConfigChanged = async (uri: Uri) => this.resetFormatters(uri);
+
+  private resetFormatters = async (uri?: Uri) => {
+    if (uri) {
+      const workspaceFolder = workspace.getWorkspaceFolder(uri);
+      this.registeredWorkspaces.delete(workspaceFolder?.uri.fsPath ?? "global");
+    } else {
+      // VS Code config change, reset everything
+      this.registeredWorkspaces.clear();
+    }
+    this.statusBar.update(FormatterStatus.Ready);
+  };
+
+  private handleActiveTextEditorChanged = async (
+    textEditor: TextEditor | undefined
+  ) => {
+    if (!textEditor) {
+      this.statusBar.hide();
+      return;
+    }
+    const { document } = textEditor;
+
+    if (document.uri.scheme !== "file") {
+      // We set as ready for untitled documents,
+      // but return because these will always
+      // use the global registered formatter.
+      this.statusBar.update(FormatterStatus.Ready);
+      return;
+    }
+    const workspaceFolder = workspace.getWorkspaceFolder(document.uri);
+
+    if (!workspaceFolder) {
+      // Do nothing, this is only for registering formatters in workspace folder.
+      return;
+    }
+
+    const prettierInstance = await this.moduleResolver.getPrettierInstance(
+      workspaceFolder.uri.fsPath
+    );
+
+    const isRegistered = this.registeredWorkspaces.has(
+      workspaceFolder.uri.fsPath
+    );
+
+    // If there isn't an instance here, it is because the module
+    // could not be loaded either locally or globably when specified
+    if (!prettierInstance) {
+      this.statusBar.update(FormatterStatus.Error);
+      return;
+    }
+
+    const selectors = await this.getSelectors(
+      prettierInstance,
+      workspaceFolder.uri
+    );
+
+    if (!isRegistered) {
+      this.registerDocumentFormatEditorProviders(selectors);
+      this.registeredWorkspaces.add(workspaceFolder.uri.fsPath);
+      this.loggingService.logDebug(
+        `Enabling Prettier for Workspace ${workspaceFolder.uri.fsPath}`,
+        selectors
+      );
+    }
+
+    const score = languages.match(selectors.languageSelector, document);
+    if (score > 0) {
+      this.statusBar.update(FormatterStatus.Ready);
+    } else {
+      this.statusBar.update(FormatterStatus.Disabled);
+    }
+  };
+
+  public async registerGlobal() {
+    const selectors = await this.getSelectors(
+      this.moduleResolver.getGlobalPrettierInstance()
+    );
+    this.registerDocumentFormatEditorProviders(selectors);
+    this.loggingService.logDebug("Enabling Prettier globally", selectors);
+  }
 
   public dispose = () => {
     this.moduleResolver.dispose();
@@ -115,112 +222,104 @@ export default class PrettierEditService implements Disposable {
     this.rangeFormatterHandler = undefined;
   };
 
+  private registerDocumentFormatEditorProviders({
+    languageSelector,
+    rangeLanguageSelector,
+  }: ISelectors) {
+    this.dispose();
+    const editProvider = new PrettierEditProvider(this.provideEdits);
+    this.rangeFormatterHandler = languages.registerDocumentRangeFormattingEditProvider(
+      rangeLanguageSelector,
+      editProvider
+    );
+    this.formatterHandler = languages.registerDocumentFormattingEditProvider(
+      languageSelector,
+      editProvider
+    );
+  }
+
   /**
    * Build formatter selectors
    */
-  private selectors = (): ISelectors => {
-    const { disableLanguages, documentSelectors } = getConfig();
+  private getSelectors = async (
+    prettierInstance: PrettierModule,
+    uri?: Uri
+  ): Promise<ISelectors> => {
+    const { languages } = prettierInstance.getSupportInfo();
 
-    let allLanguages: string[];
-    if (workspace.workspaceFolders === undefined) {
-      allLanguages = this.languageResolver.getSupportedLanguages();
-    } else {
-      allLanguages = [];
-      for (const folder of workspace.workspaceFolders) {
-        const allWorkspaceLanguages = this.languageResolver.getSupportedLanguages(
-          folder.uri.fsPath
-        );
-        allWorkspaceLanguages.forEach((lang) => {
-          if (!allLanguages.includes(lang)) {
-            allLanguages.push(lang);
-          }
-        });
+    languages.forEach((lang) => {
+      if (lang && lang.vscodeLanguageIds) {
+        this.allLanguages.push(...lang.vscodeLanguageIds);
       }
-    }
-
-    let allExtensions: string[];
-    if (workspace.workspaceFolders === undefined) {
-      allExtensions = this.languageResolver.getSupportedFileExtensions();
-    } else {
-      allExtensions = [];
-      for (const folder of workspace.workspaceFolders) {
-        const allWorkspaceLanguages = this.languageResolver.getSupportedFileExtensions(
-          folder.uri.fsPath
-        );
-        allWorkspaceLanguages.forEach((lang) => {
-          if (!allExtensions.includes(lang)) {
-            allExtensions.push(lang);
-          }
-        });
-      }
-    }
-
-    this.loggingService.logInfo(
-      `Enabling prettier for languages: ${allLanguages.sort().join(", ")}`
-    );
-
-    this.loggingService.logInfo(
-      `Enabling prettier for file extensions: ${allExtensions
-        .sort()
-        .join(", ")}`
-    );
-
-    if (documentSelectors && documentSelectors.length > 0) {
-      this.loggingService.logInfo(
-        `Enabling prettier for user defined selectors: ${documentSelectors
-          .sort()
-          .join(", ")}`
-      );
-    }
-
-    const allRangeLanguages = this.languageResolver.getRangeSupportedLanguages();
-    this.loggingService.logInfo(
-      `Enabling prettier for range supported languages: ${allRangeLanguages
-        .sort()
-        .join(", ")}`
-    );
-
-    // Language selector for file extensions
-    const extensionLanguageSelector: DocumentFilter = {
-      pattern: `**/*.{${allExtensions.map((e) => e.substring(1)).join(",")}}`,
-    };
-
-    const customLanguageSelectors: DocumentFilter[] = [];
-    documentSelectors.forEach((pattern) => {
-      customLanguageSelectors.push({
-        pattern,
-      });
+    });
+    this.allLanguages = this.allLanguages.filter((value, index, self) => {
+      return self.indexOf(value) === index;
     });
 
-    // Language selectors for language IDs
-    const globalLanguageSelector: DocumentFilter[] = allLanguages
-      .filter((l) => !disableLanguages.includes(l))
-      .map((l) => ({ language: l }));
-    const globalRangeLanguageSelector: DocumentFilter[] = allRangeLanguages
-      .filter((l) => !disableLanguages.includes(l))
-      .map((l) => ({ language: l }));
+    languages.forEach((lang) => {
+      if (lang && lang.extensions) {
+        this.allExtensions.push(...lang.extensions);
+      }
+    });
+    this.allExtensions = this.allExtensions.filter((value, index, self) => {
+      return self.indexOf(value) === index;
+    });
 
-    return {
-      languageSelector: globalLanguageSelector
-        .concat(customLanguageSelectors)
-        .concat(extensionLanguageSelector),
-      rangeLanguageSelector: globalRangeLanguageSelector,
-    };
+    const { documentSelectors } = getConfig();
+
+    // Language selector for file extensions
+    const extensionLanguageSelector: DocumentFilter[] = uri
+      ? this.allExtensions.length === 0
+        ? []
+        : [
+            {
+              pattern: `${uri.fsPath}/**/*.{${this.allExtensions
+                .map((e) => e.substring(1))
+                .join(",")}}`,
+              scheme: "file",
+            },
+          ]
+      : [];
+
+    const customLanguageSelectors: DocumentFilter[] = uri
+      ? documentSelectors.map((pattern) => ({
+          pattern: `${uri.fsPath}/${pattern}`,
+          scheme: "file",
+        }))
+      : [];
+
+    const defaultLanguageSelectors: DocumentFilter[] = [
+      ...this.allLanguages.map((language) => ({ language })),
+      { language: "jsonc", scheme: "vscode-userdata" }, // Selector for VSCode settings.json
+    ];
+
+    const languageSelector = [
+      ...customLanguageSelectors,
+      ...extensionLanguageSelector,
+      ...defaultLanguageSelectors,
+    ];
+
+    const rangeLanguageSelector: DocumentFilter[] = [
+      ...this.allRangeLanguages.map((language) => ({
+        language,
+      })),
+    ];
+    return { languageSelector, rangeLanguageSelector };
   };
 
   private provideEdits = async (
     document: TextDocument,
-    options?: RangeFormattingOptions
+    options: ExtensionFormattingOptions
   ): Promise<TextEdit[]> => {
-    const hrStart = process.hrtime();
+    const startTime = new Date().getTime();
     const result = await this.format(document.getText(), document, options);
     if (!result) {
       // No edits happened, return never so VS Code can try other formatters
       return [];
     }
-    const hrEnd = process.hrtime(hrStart);
+    const duration = new Date().getTime() - startTime;
     this.loggingService.logInfo(
-      `Formatting completed in ${hrEnd[1] / 1000000}ms.`
+      `Formatting completed in ${duration / 1000}ms.`
     );
     return [TextEdit.replace(this.fullDocumentRange(document), result)];
   };
@@ -233,66 +332,70 @@ export default class PrettierEditService implements Disposable {
    */
   private async format(
     text: string,
-    { fileName, languageId, uri, isUntitled }: TextDocument,
-    rangeFormattingOptions?: RangeFormattingOptions
+    doc: TextDocument,
+    options: ExtensionFormattingOptions
   ): Promise<string | undefined> {
-    this.loggingService.logInfo(`Formatting ${fileName}`);
+    const { fileName, uri, languageId } = doc;
+
+    this.loggingService.logInfo(`Formatting ${uri}`);
 
     const vscodeConfig = getConfig(uri);
 
-    // This has to stay, as it allows to skip in sub workspaceFolders. Sadly noop.
-    // wf1  (with "lang") -> glob: "wf1/**"
-    // wf1/wf2  (without "lang") -> match "wf1/**"
-    if (vscodeConfig.disableLanguages.includes(languageId)) {
-      this.statusBarService.updateStatusBar(FormattingResult.Ignore);
+    const resolvedConfig = await this.moduleResolver.getResolvedConfig(
+      doc,
+      vscodeConfig
+    );
+    if (resolvedConfig === "error") {
+      this.statusBar.update(FormatterStatus.Error);
+      return;
+    }
+    if (resolvedConfig === "disabled") {
+      this.statusBar.update(FormatterStatus.Disabled);
       return;
     }
 
-    try {
-      const hasConfig = await this.configResolver.checkHasPrettierConfig(
-        fileName
-      );
+    const prettierInstance = await this.moduleResolver.getPrettierInstance(
+      fileName
+    );
 
-      if (!isUntitled && !hasConfig && vscodeConfig.requireConfig) {
-        this.loggingService.logInfo(
-          "Require config set to true and no config present. Skipping file."
-        );
-        this.statusBarService.updateStatusBar(FormattingResult.Ignore);
-        return;
-      }
-    } catch (error) {
+    if (!prettierInstance) {
       this.loggingService.logError(
-        "Invalid prettier configuration file detected.",
-        error
+        "Prettier could not be loaded. See previous logs for more information."
       );
-      this.notificationService.showErrorMessage(INVALID_PRETTIER_CONFIG);
-      this.statusBarService.updateStatusBar(FormattingResult.Error);
+      this.statusBar.update(FormatterStatus.Error);
       return;
     }
 
-    const ignorePath = this.ignoreResolver.getIgnorePath(fileName);
+    let resolvedIgnorePath: string | undefined;
+    if (vscodeConfig.ignorePath) {
+      resolvedIgnorePath = getWorkspaceRelativePath(
+        fileName,
+        vscodeConfig.ignorePath
+      );
+      if (resolvedIgnorePath) {
+        this.loggingService.logInfo(
+          `Using ignore file (if present) at ${resolvedIgnorePath}`
+        );
+      }
+    }
 
-    const prettierInstance = this.moduleResolver.getPrettierInstance(fileName, {
-      showNotifications: true,
-    });
-
-    let fileInfo: prettier.FileInfoResult | undefined;
+    let fileInfo: PrettierFileInfoResult | undefined;
     if (fileName) {
       fileInfo = await prettierInstance.getFileInfo(fileName, {
-        ignorePath,
-        resolveConfig: true, // Fix for 1.19 (https://prettier.io/blog/2019/11/09/1.19.0.html#api)
+        ignorePath: resolvedIgnorePath,
+        resolveConfig: true,
         withNodeModules: vscodeConfig.withNodeModules,
       });
       this.loggingService.logInfo("File Info:", fileInfo);
     }
 
-    if (fileInfo && fileInfo.ignored) {
+    if (!options.force && fileInfo && fileInfo.ignored) {
       this.loggingService.logInfo("File is ignored, skipping.");
-      this.statusBarService.updateStatusBar(FormattingResult.Ignore);
+      this.statusBar.update(FormatterStatus.Ignore);
       return;
     }
 
-    let parser: prettier.BuiltInParserName | string | undefined;
+    let parser: PrettierBuiltInParserName | string | undefined;
     if (fileInfo && fileInfo.inferredParser) {
       parser = fileInfo.inferredParser;
     } else if (languageId !== "plaintext") {
@@ -303,67 +406,104 @@ export default class PrettierEditService implements Disposable {
       this.loggingService.logWarning(
         `Parser not inferred, trying VS Code language.`
       );
-      parser = this.languageResolver.getParserFromLanguageId(uri, languageId);
+      const languages = prettierInstance.getSupportInfo().languages;
+      parser = getParserFromLanguageId(languages, uri, languageId);
     }
 
     if (!parser) {
       this.loggingService.logError(
         `Failed to resolve a parser, skipping file. If you registered a custom file extension, be sure to configure the parser.`
       );
-      this.statusBarService.updateStatusBar(FormattingResult.Error);
+      this.statusBar.update(FormatterStatus.Error);
       return;
     }
 
-    let configPath: string | undefined;
-    try {
-      configPath = (await prettier.resolveConfigFile(fileName)) ?? undefined;
-    } catch (error) {
-      this.loggingService.logError(
-        `Error resolving prettier configuration for ${fileName}`,
-        error
-      );
-      this.statusBarService.updateStatusBar(FormattingResult.Error);
-      return;
-    }
-
-    const {
-      options: prettierOptions,
-      error,
-    } = await this.configResolver.getPrettierOptions(
+    const prettierOptions = this.getPrettierOptions(
       fileName,
-      parser as prettier.BuiltInParserName,
+      parser as PrettierBuiltInParserName,
       vscodeConfig,
-      {
-        config: vscodeConfig.configPath
-          ? getWorkspaceRelativePath(fileName, vscodeConfig.configPath)
-          : configPath,
-        editorconfig: vscodeConfig.useEditorConfig,
-      },
-      rangeFormattingOptions
+      resolvedConfig,
+      options
     );
-
-    if (error) {
-      this.loggingService.logError(
-        `Error resolving prettier configuration for ${fileName}`,
-        error
-      );
-      this.statusBarService.updateStatusBar(FormattingResult.Error);
-      return;
-    }
 
     this.loggingService.logInfo("Prettier Options:", prettierOptions);
 
     try {
       const formattedText = prettierInstance.format(text, prettierOptions);
-      this.statusBarService.updateStatusBar(FormattingResult.Success);
+      this.statusBar.update(FormatterStatus.Success);
 
       return formattedText;
     } catch (error) {
       this.loggingService.logError("Error formatting document.", error);
-      this.statusBarService.updateStatusBar(FormattingResult.Error);
+      this.statusBar.update(FormatterStatus.Error);
 
       return text;
     }
+  }
+
+  private getPrettierOptions(
+    fileName: string,
+    parser: PrettierBuiltInParserName,
+    vsCodeConfig: PrettierOptions,
+    configOptions: PrettierOptions | null,
+    extentionFormattingOptions: ExtensionFormattingOptions
+  ): Partial<PrettierOptions> {
+    const fallbackToVSCodeConfig = configOptions === null;
+
+    const vsOpts: PrettierOptions = {};
+    if (fallbackToVSCodeConfig) {
+      vsOpts.arrowParens = vsCodeConfig.arrowParens;
+      vsOpts.bracketSpacing = vsCodeConfig.bracketSpacing;
+      vsOpts.endOfLine = vsCodeConfig.endOfLine;
+      vsOpts.htmlWhitespaceSensitivity = vsCodeConfig.htmlWhitespaceSensitivity;
+      vsOpts.insertPragma = vsCodeConfig.insertPragma;
+      vsOpts.jsxBracketSameLine = vsCodeConfig.jsxBracketSameLine;
+      vsOpts.jsxSingleQuote = vsCodeConfig.jsxSingleQuote;
+      vsOpts.printWidth = vsCodeConfig.printWidth;
+      vsOpts.proseWrap = vsCodeConfig.proseWrap;
+      vsOpts.quoteProps = vsCodeConfig.quoteProps;
+      vsOpts.requirePragma = vsCodeConfig.requirePragma;
+      vsOpts.semi = vsCodeConfig.semi;
+      vsOpts.singleQuote = vsCodeConfig.singleQuote;
+      vsOpts.tabWidth = vsCodeConfig.tabWidth;
+      vsOpts.trailingComma = vsCodeConfig.trailingComma;
+      vsOpts.useTabs = vsCodeConfig.useTabs;
+      vsOpts.vueIndentScriptAndStyle = vsCodeConfig.vueIndentScriptAndStyle;
+    }
+
+    this.loggingService.logInfo(
+      fallbackToVSCodeConfig
+        ? "No local configuration (i.e. .prettierrc or .editorconfig) detected, falling back to VS Code configuration"
+        : "Detected local configuration (i.e. .prettierrc or .editorconfig), VS Code configuration will not be used"
+    );
+
+    let rangeFormattingOptions: RangeFormattingOptions | undefined;
+    if (
+      extentionFormattingOptions.rangeEnd &&
+      extentionFormattingOptions.rangeStart
+    ) {
+      rangeFormattingOptions = {
+        rangeEnd: extentionFormattingOptions.rangeEnd,
+        rangeStart: extentionFormattingOptions.rangeStart,
+      };
+    }
+
+    const options: PrettierOptions = {
+      ...(fallbackToVSCodeConfig ? vsOpts : {}),
+      ...{
+        /* cspell: disable-next-line */
+        filepath: fileName,
+        parser: parser as PrettierBuiltInParserName,
+      },
+      ...(rangeFormattingOptions || {}),
+      ...(configOptions || {}),
+    };
+
+    if (extentionFormattingOptions.force && options.requirePragma === true) {
+      options.requirePragma = false;
+    }
+
+    return options;
   }
 
   private fullDocumentRange(document: TextDocument): Range {

@@ -4,6 +4,96 @@ All notable changes to the "prettier-vscode" extension will be documented in thi
 
 <!-- Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file. -->
 
+## [9.0.1]
+
+- Changed schemastore.com URLs to use HTTPS
+
+## [9.0.0]
+
+- Support for browser VS Code
+- Support for virtual file systems
+
+## [8.2.0]
+
+- Updated Prettier to 2.4.1
+- VS Code version to 1.60.0
+
+## [8.1.0]
+
+- Setting `requireConfig` no longer accepts `.editorconfig` as a valid config.
+
+## [8.0.1]
+
+- Forced version of vsce on build
+
+## [8.0.0]
+
+- Updated Prettier to 2.3.1
+- Minimum supported VS Code version is now 1.57.0
+- Added `id` and `name` properties to status bar (#2003)
+- Uses VS Code [Workspace Trust](https://code.visualstudio.com/docs/editor/workspace-trust)
+
+## [7.1.0]
+
+- Revert bad changes from 7.0.0, will republish as 8.0.0
+
+## [7.0.0]
+
+- Bad release, do not use.
+
+## [6.4.0]
+
+- Updated Prettier to 2.3.0
+- Forced mode now ignores `requirePragma` config
+- Fix mismatch of option name `ignore` in description of HTML Whitespace Sensitivity ([#1941](https://github.com/prettier/prettier-vscode/pull/1941))
+
+## [6.3.2]
+
+- Removed loading status bar state
+
+## [6.3.1]
+
+- Updates to formatter registration
+
+## [6.3.0]
+
+- Removed notifications, all messages logged with status icon update.
+
+## [6.2.1]
+
+- Fixed regressions where VS Code settings `settings.json` could not be formatted
+
+## [6.2.0]
+
+- Stable 6.0 release, see Beta releases for changes
+
+## [6.1.0] Beta
+
+- Added command to force formatting regardless of ignores `Format Document (Forced)`
+
+## [6.0.0] Beta
+
+- Automatically detect package manager
+- Delayed prettier registration to improve performance on large projects
+- Status bar state and icons updates
+- Prompt to allow Prettier module to load
+- Added debug mode for logging
+- Removed config for `disabledLanguages`
+
+## [5.9.2]
+
+- Reverted automatical detection of package manager
+
+## [5.9.1]
+
+- Removed Status bar color
+
+## [5.9.0]
+
+- Automatically detect package manager
+- Move check mark in status bar to left side to match ESLint
+- Status bar background to `statusBarItem.errorBackground` color on error
+
 ## [5.8.0]
 
 - Updated prettier to 2.2.0
